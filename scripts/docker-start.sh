@@ -15,4 +15,4 @@ subwasm info data/runtime.wasm
 npm start
 
 # Run new chain
-./binary --chain fork.json --alice
+# ./binary --chain fork.json --alice

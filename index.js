@@ -110,17 +110,18 @@ async function main() {
     }
   });
 
-  // Generate chain spec for original and forked chains
-  if (originalChain == '') {
-    execSync(binaryPath + ` build-spec --raw > ` + originalSpecPath);
-  } else {
-    execSync(binaryPath + ` build-spec --chain ${originalChain} --raw > ` + originalSpecPath);
-  }
-  if (forkChain == '') {
-    execSync(binaryPath + ` build-spec --dev --raw > ` + forkedSpecPath);
-  } else {
-    execSync(binaryPath + ` build-spec --chain ${forkChain} --raw > ` + forkedSpecPath);
-  }
+  // Ignore this part, because we generate our own chain spec before.
+  // // Generate chain spec for original and forked chains
+  // if (originalChain == '') {
+  //   execSync(binaryPath + ` build-spec --raw > ` + originalSpecPath);
+  // } else {
+  //   execSync(binaryPath + ` build-spec --chain ${originalChain} --raw > ` + originalSpecPath);
+  // }
+  // if (forkChain == '') {
+  //   execSync(binaryPath + ` build-spec --dev --raw > ` + forkedSpecPath);
+  // } else {
+  //   execSync(binaryPath + ` build-spec --chain ${forkChain} --raw > ` + forkedSpecPath);
+  // }
 
   let storage = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
   let originalSpec = JSON.parse(fs.readFileSync(originalSpecPath, 'utf8'));
