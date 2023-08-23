@@ -6,10 +6,8 @@ RPC_ENDPOINT=${RPC_ENDPOINT:-"https://rpcpc1-qa.agung.peaq.network"}
 ALICE=${ALICE:-"1"}
 
 # Setup
-rm data/fork.json || true
-rm data/genesis.json || true
-rm data/runtime.hex || true
-rm data/storage.json || true
+rm -rf data || true
+mkdir -p data
 
 # 1. Setup the same binary file we used in the current chain
 if [ ! -f $SOURCE_PATH/peaq-node ]; then
@@ -17,12 +15,12 @@ if [ ! -f $SOURCE_PATH/peaq-node ]; then
   exit 1
 fi
 ln -sf $SOURCE_PATH/peaq-node data/binary
+
 # 2. Put the raw parachain file you can control here, for example: the sudo user, blah blah blah
 ./data/binary build-spec --disable-default-bootnode --chain $SOURCE_PATH/parachain.plaintext.config --raw > data/fork.json
-
-# Run
 ./data/binary build-spec --disable-default-bootnode --chain $SOURCE_PATH/parachain.plaintext.config --raw > data/genesis.json
 
+# Run
 HTTP_RPC_ENDPOINT=$RPC_ENDPOINT \
 ALICE=$ALICE \
 scripts/docker-start.sh
