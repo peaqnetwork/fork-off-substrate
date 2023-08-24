@@ -1,11 +1,11 @@
 #!/bin/sh
 
-SOURCE_PATH=${SOURCE_PATH:-"/home/jaypan/Work/peaq/fork-test/fork-binary/peaq-dev-v06042023"}
+SOURCE_PATH=${SOURCE_PATH}
 OUTPUT_PATH=${SOURCE_PATH}/output
 RPC_ENDPOINT=${RPC_ENDPOINT:-"https://rpcpc1-qa.agung.peaq.network"}
 ALICE=${ALICE:-"1"}
 
-# Setup
+# 0. Reset
 rm -rf data || true
 mkdir -p data
 
@@ -20,12 +20,21 @@ ln -sf $SOURCE_PATH/peaq-node data/binary
 ./data/binary build-spec --disable-default-bootnode --chain $SOURCE_PATH/parachain.plaintext.config --raw > data/fork.json
 ./data/binary build-spec --disable-default-bootnode --chain $SOURCE_PATH/parachain.plaintext.config --raw > data/genesis.json
 
-# Run
+# 3. Run the binary to check the version
+BINARY=data/binary
+$BINARY --version
+
+# 4. Update the subwasm
+subwasm --version
+subwasm get $RPC_ENDPOINT -o data/runtime.wasm
+subwasm info data/runtime.wasm
+
+# 5. Fock the chain
 HTTP_RPC_ENDPOINT=$RPC_ENDPOINT \
 ALICE=$ALICE \
-scripts/docker-start.sh
+npm start
 
-# Output
+# 6. Store to output
 mkdir -p $OUTPUT_PATH
 cp data/fork.json $OUTPUT_PATH/fork.json
 ./data/binary export-genesis-wasm --chain data/fork.json > $OUTPUT_PATH/fork.json.wasm

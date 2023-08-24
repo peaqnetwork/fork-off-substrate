@@ -58,7 +58,7 @@ The script can be tweaked and configured using various environment variables -
 | ORIG_CHAIN | Chain to use as the original chain.  | `$default_of_the_binary` |
 | FORK_CHAIN | Chain to use as base for the forked chain.  | `dev` |
 | ALICE | If set, the script will replace the chain's sudo account with `//Alice` | `NULL` |
-| QUICK_MODE | If set, it parallelizes the data download from the RPC endpoint | `NULL` | 
+| QUICK_MODE | If set, it parallelizes the data download from the RPC endpoint | `NULL` |
 
 ## Read more
 
@@ -91,9 +91,9 @@ For runtimeupgrade testings, we have to fork the source chain. Please use the fo
 4. Run the binary to genrate the file
 ```
 env ALICE=1 \
-SOURCE_FOLDER="Your Folder" \
-RPC_ENDPOINT="The " \
-sh forked.generated.sh; \
+SOURCE_PATH="/home/jaypan/Work/peaq/fork-test/fork-binary/peaq-dev-v06042023" \
+RPC_ENDPOINT="https://rpcpc1-qa.agung.peaq.network" \
+sh forked.generated.sh;
 ```
 5. The forked raw chain spec/genesis file/wasm file are genrated into your folder under your SOURCE_FOLDER
 6. Please use that file to register your parachain
