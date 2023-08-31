@@ -105,6 +105,7 @@ async function main() {
   modules.forEach((module) => {
     if (module.storage) {
       if (!skippedModulesPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
         prefixes.push(xxhashAsHex(module.name, 128));
       }
     }
