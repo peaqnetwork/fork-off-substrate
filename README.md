@@ -94,6 +94,12 @@ env ALICE=1 \
 SOURCE_PATH="/home/jaypan/Work/peaq/fork-test/fork-binary/peaq-dev-v06042023" \
 RPC_ENDPOINT="https://rpcpc1-qa.agung.peaq.network" \
 sh forked.generated.sh;
+
+env ALICE=1 \
+SOURCE_PATH="/home/jaypan/Work/peaq/fork-test/fork-binary/krest-v31052023" \
+RPC_ENDPOINT="https://erpc-krest.peaq.network" \
+sh -x forked.generated.sh;
+
 ```
 5. The forked raw chain spec/genesis file/wasm file are genrated into your folder under your SOURCE_FOLDER
 6. Please use that file to register your parachain
