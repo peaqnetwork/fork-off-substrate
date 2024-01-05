@@ -4,6 +4,7 @@ SOURCE_PATH=${SOURCE_PATH}
 OUTPUT_PATH=${SOURCE_PATH}/output
 RPC_ENDPOINT=${RPC_ENDPOINT:-"https://rpcpc1-qa.agung.peaq.network"}
 ALICE=${ALICE:-"1"}
+KEEP_COLLATOR=${KEEP_COLLATOR:-"false"}
 
 # 0. Reset
 rm -rf data || true
@@ -32,6 +33,7 @@ subwasm info data/runtime.wasm
 # 5. Fock the chain
 HTTP_RPC_ENDPOINT=$RPC_ENDPOINT \
 ALICE=$ALICE \
+KEEP_COLLATOR=$KEEP_COLLATOR \
 npm start
 
 # 6. Store to output
