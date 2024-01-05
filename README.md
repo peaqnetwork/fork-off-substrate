@@ -58,7 +58,7 @@ The script can be tweaked and configured using various environment variables -
 | ORIG_CHAIN | Chain to use as the original chain.  | `$default_of_the_binary` |
 | FORK_CHAIN | Chain to use as base for the forked chain.  | `dev` |
 | ALICE | If set, the script will replace the chain's sudo account with `//Alice` | `NULL` |
-| QUICK_MODE | If set, it parallelizes the data download from the RPC endpoint | `NULL` | 
+| QUICK_MODE | If set, it parallelizes the data download from the RPC endpoint | `NULL` |
 
 ## Read more
 
@@ -82,3 +82,28 @@ If you would like to understand how this script works, please read this [blog po
 ## Credits
 
 This script is based on [a script shared in the substrate riot channel](https://hackmd.io/mGgNZX0VT4S0UTaq89-_SQ)
+
+# Forked chain for runtime upgrade testings
+For runtimeupgrade testings, we have to fork the source chain. Please use the forked.generated.sh to genrate the related files
+1. Create one folder
+2. Copy the peaq-node in the formal docker image to that folder
+If your want to forked the parachain which ran the runtime upgraded already, please remember to use the correct binary
+and docker image which are the same as the runtime upgrade.
+For example, our Krest network's runtime ugprade version is based on the krest-v0.0.3, then your binary/docker image
+should be also based on the krest-v0.0.3
+3. Prepare the parachain.plaintext.config into your folder, too. In this steps, please use the chain spec file you can control. For example, the chain spec file which is genrated by the parachain launch.
+4. Run the binary to genrate the file
+```
+env ALICE=1 \
+SOURCE_PATH="/home/jaypan/Work/peaq/fork-test/fork-binary/peaq-dev-v06042023" \
+RPC_ENDPOINT="https://rpcpc1-qa.agung.peaq.network" \
+sh forked.generated.sh;
+
+env ALICE=1 \
+SOURCE_PATH="/home/jaypan/Work/peaq/fork-test/fork-binary/krest-v0.0.3" \
+RPC_ENDPOINT="https://erpc-krest.peaq.network" \
+sh -x forked.generated.sh;
+
+```
+5. The forked raw chain spec/genesis file/wasm file are genrated into your folder under your SOURCE_FOLDER
+6. Please use that file to register your parachain

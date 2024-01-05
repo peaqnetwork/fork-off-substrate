@@ -25,6 +25,7 @@ const totalChunks = Math.pow(256, chunksLevel);
 const alice = process.env.ALICE || ''
 const originalChain = process.env.ORIG_CHAIN || '';
 const forkChain = process.env.FORK_CHAIN || '';
+const keepCollator = process.env.KEEP_COLLATOR === 'true';
 
 let chunksFetched = 0;
 let separator = false;
@@ -44,8 +45,9 @@ const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_cla
  * e.g. console.log(xxhashAsHex('System', 128)).
  */
 let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371da9' /* System.Account */];
-const skippedModulesPrefix = ['System', 'Session', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker',
-                              'Authorship', 'Aura', 'AuraExt'];
+const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
+
+const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
 
 async function fixParachinStates (api, forkedSpec) {
   const skippedKeys = [
@@ -104,23 +106,31 @@ async function main() {
   const modules = metadata.asLatest.pallets;
   modules.forEach((module) => {
     if (module.storage) {
-      if (!skippedModulesPrefix.includes(module.name.toHuman())) {
-        prefixes.push(xxhashAsHex(module.name, 128));
+      if (skippedModulesPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping prefix for module: " + module.name.toHuman()));
+        return;
       }
+      if (!keepCollator && skippedCollatorModulesPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping collator prefix for module: " + module.name.toHuman()));
+        return;
+      }
+      console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
+      prefixes.push(xxhashAsHex(module.name, 128));
     }
   });
 
-  // Generate chain spec for original and forked chains
-  if (originalChain == '') {
-    execSync(binaryPath + ` build-spec --raw > ` + originalSpecPath);
-  } else {
-    execSync(binaryPath + ` build-spec --chain ${originalChain} --raw > ` + originalSpecPath);
-  }
-  if (forkChain == '') {
-    execSync(binaryPath + ` build-spec --dev --raw > ` + forkedSpecPath);
-  } else {
-    execSync(binaryPath + ` build-spec --chain ${forkChain} --raw > ` + forkedSpecPath);
-  }
+  // Ignore this part, because we generate our own chain spec before.
+  // // Generate chain spec for original and forked chains
+  // if (originalChain == '') {
+  //   execSync(binaryPath + ` build-spec --raw > ` + originalSpecPath);
+  // } else {
+  //   execSync(binaryPath + ` build-spec --chain ${originalChain} --raw > ` + originalSpecPath);
+  // }
+  // if (forkChain == '') {
+  //   execSync(binaryPath + ` build-spec --dev --raw > ` + forkedSpecPath);
+  // } else {
+  //   execSync(binaryPath + ` build-spec --chain ${forkChain} --raw > ` + forkedSpecPath);
+  // }
 
   let storage = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
   let originalSpec = JSON.parse(fs.readFileSync(originalSpecPath, 'utf8'));
