@@ -107,3 +107,9 @@ sh -x forked.generated.sh;
 ```
 5. The forked raw chain spec/genesis file/wasm file are genrated into your folder under your SOURCE_FOLDER
 6. Please use that file to register your parachain
+
+
+
+## Note:
+1. We have to install subwasm https://github.com/chevdor/subwasm/releases
+2. People can use KEEP_COLLATOR and KEEP_PARACHAIN to control the forked pallet
