@@ -26,6 +26,7 @@ const alice = process.env.ALICE || ''
 const originalChain = process.env.ORIG_CHAIN || '';
 const forkChain = process.env.FORK_CHAIN || '';
 const keepCollator = process.env.KEEP_COLLATOR === 'true';
+const keepAsset = process.env.KEEP_ASSET === 'true';
 const keepParachain = process.env.KEEP_PARACHAIN === 'true';
 
 let chunksFetched = 0;
@@ -49,6 +50,7 @@ let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
+const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
 
 async function fixParachinStates (api, forkedSpec) {
   const skippedKeys = [
@@ -113,6 +115,10 @@ async function main() {
       }
       if (!keepCollator && skippedCollatorModulesPrefix.includes(module.name.toHuman())) {
         console.log(chalk.yellow("Skipping collator prefix for module: " + module.name.toHuman()));
+        return;
+      }
+      if (!keepAsset && skippedAssetPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping asset prefix for module: " + module.name.toHuman()));
         return;
       }
       if (!keepParachain && skippedParachainPrefix.includes(module.name.toHuman())) {
