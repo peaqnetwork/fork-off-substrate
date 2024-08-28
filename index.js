@@ -28,6 +28,7 @@ const forkChain = process.env.FORK_CHAIN || '';
 const keepCollator = process.env.KEEP_COLLATOR === 'true';
 const keepAsset = process.env.KEEP_ASSET === 'true';
 const keepParachain = process.env.KEEP_PARACHAIN === 'true';
+const ignoreWASMUpdate = process.env.IGNORE_WASM_UPDATE === 'true';
 
 let chunksFetched = 0;
 let separator = false;
@@ -68,11 +69,13 @@ async function main() {
   }
   execFileSync('chmod', ['+x', binaryPath]);
 
-  if (!fs.existsSync(wasmPath)) {
-    console.log(chalk.red('WASM missing. Please copy the WASM blob of your substrate node to the data folder and rename it to "runtime.wasm"'));
-    process.exit(1);
+  if (!ignoreWASMUpdate) {
+    if (!fs.existsSync(wasmPath)) {
+      console.log(chalk.red('WASM missing. Please copy the WASM blob of your substrate node to the data folder and rename it to "runtime.wasm"'));
+      process.exit(1);
+    }
+    execSync('cat ' + wasmPath + ' | hexdump -ve \'/1 "%02x"\' > ' + hexPath);
   }
-  execSync('cat ' + wasmPath + ' | hexdump -ve \'/1 "%02x"\' > ' + hexPath);
 
   let api;
   console.log(chalk.green('We are intentionally using the HTTP endpoint. If you see any warnings about that, please ignore them.'));
@@ -162,8 +165,15 @@ async function main() {
 
   fixParachinStates(api, forkedSpec);
 
-  // Set the code to the current runtime code
-  forkedSpec.genesis.raw.top['0x3a636f6465'] = '0x' + fs.readFileSync(hexPath, 'utf8').trim();
+  // Ignore the WASM update because the binary's WASM code is not the same as the runtime.wasm
+  // However, if you want to update the WASM code, set the IGNORE_WASM_UPDATE env variable to false
+  if (!ignoreWASMUpdate) {
+    console.log(chalk.green('Updating WASM code'));
+    // Set the code to the current runtime code
+    forkedSpec.genesis.raw.top['0x3a636f6465'] = '0x' + fs.readFileSync(hexPath, 'utf8').trim();
+  } else {
+    console.log(chalk.yellow('Ignoring WASM update in stat. If you want to update the WASM code, set the IGNORE_WASM_UPDATE env variable to false'));
+  }
 
   // To prevent the validator set from changing mid-test, set Staking.ForceEra to ForceNone ('0x02')
   forkedSpec.genesis.raw.top['0x5f3e4907f716ac89b6347d15ececedcaf7dad0317324aecae8744b87fc95f2f3'] = '0x02';

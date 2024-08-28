@@ -5,6 +5,7 @@ OUTPUT_PATH=${SOURCE_PATH}/output
 RPC_ENDPOINT=${RPC_ENDPOINT:-"https://rpcpc1-qa.agung.peaq.network"}
 ALICE=${ALICE:-"1"}
 KEEP_COLLATOR=${KEEP_COLLATOR:-"false"}
+IGNORE_WASM_UPDATE=${IGNORE_WASM_UPDATE:-"true"}
 
 # 0. Reset
 rm -rf data || true
@@ -26,14 +27,16 @@ BINARY=data/binary
 $BINARY --version
 
 # 4. Update the subwasm
-subwasm --version
-subwasm get $RPC_ENDPOINT -o data/runtime.wasm
-subwasm info data/runtime.wasm
+# Because we use the ignore wasm update, we don't need to use subwasm anymore
+# subwasm --version
+# subwasm get $RPC_ENDPOINT -o data/runtime.wasm
+# subwasm info data/runtime.wasm
 
 # 5. Fock the chain
 HTTP_RPC_ENDPOINT=$RPC_ENDPOINT \
 ALICE=$ALICE \
 KEEP_COLLATOR=$KEEP_COLLATOR \
+IGNORE_WASM_UPDATE=$IGNORE_WASM_UPDATE \
 npm start
 
 # 6. Store to output
