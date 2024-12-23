@@ -6,6 +6,10 @@ require("dotenv").config();
 const { ApiPromise } = require('@polkadot/api');
 const { HttpProvider } = require('@polkadot/rpc-provider');
 const { xxhashAsHex } = require('@polkadot/util-crypto');
+const { chain } = require('stream-chain');
+const { parser } = require('stream-json');
+const { streamArray } = require('stream-json/streamers/StreamArray');
+const stringify = require('streaming-json-stringify'); // Correct streaming JSON library
 const execFileSync = require('child_process').execFileSync;
 const execSync = require('child_process').execSync;
 const binaryPath = path.join(__dirname, 'data', 'binary');
@@ -51,7 +55,7 @@ let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371
 let peaqPrefixes = [];
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
-const isPeaqPrefix = ['PeaqDid', 'PeaqStorage', 'PeaqRBAC']
+const isPeaqPrefix = ['PeaqDid', 'PeaqStorage', 'PeaqRbac']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
 const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
 
@@ -59,11 +63,61 @@ async function fixParachinStates (api, forkedSpec) {
   const skippedKeys = [
   // The parachain didn't have the parasScheduler module, so we skip below module
   // parasScheduler module only on relay chain, but we are forked parachain
-  //  api.query.parasScheduler.sessionStartBlock.key()
+  // api.query.parasScheduler.sessionStartBlock.key()
   ];
   for (const k of skippedKeys) {
     delete forkedSpec.genesis.raw.top[k];
   }
+}
+
+async function processLargeJSONFile(filePath) {
+  const results = [];
+
+  return new Promise((resolve, reject) => {
+    const pipeline = chain([
+      fs.createReadStream(filePath),
+      parser(),
+      streamArray(),
+    ]);
+
+    pipeline.on('data', ({ value }) => {
+      results.push(value);
+    });
+
+    pipeline.on('end', () => {
+      console.log('File processing completed');
+      resolve(results);
+    });
+
+    pipeline.on('error', (err) => {
+      console.error('Error processing file:', err);
+      reject(err);
+    });
+  });
+}
+
+async function writeLargeJSONFile(filePath, data) {
+  return new Promise((resolve, reject) => {
+    const jsonStream = stringify(data, null, 4);
+    const writeStream = fs.createWriteStream(filePath);
+    jsonStream.pipe(writeStream);
+
+    // Handle stream events
+    writeStream.on('finish', () => {
+      console.log('File writing completed');
+      resolve();
+    });
+
+    writeStream.on('error', (err) => {
+      console.error('Error writing file:', err);
+      reject(err);
+    });
+
+    jsonStream.on('error', (err) => {
+      console.error('Error during JSON serialization:', err);
+      reject(err);
+    });
+  });
 }
 
 async function main() {
@@ -164,7 +218,7 @@ async function main() {
   //   execSync(binaryPath + ` build-spec --chain ${forkChain} --raw > ` + forkedSpecPath);
   // }
 
-  let storage = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
+  let storage = await processLargeJSONFile(storagePath);
   let originalSpec = JSON.parse(fs.readFileSync(originalSpecPath, 'utf8'));
   let forkedSpec = JSON.parse(fs.readFileSync(forkedSpecPath, 'utf8'));
 
@@ -178,10 +232,20 @@ async function main() {
     .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
     .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
 
-  storage
-    .filter((i) => peaqPrefixes.some((prefix) => i[0].startsWith(prefix)))
-    .slice(0, 50000)
-    .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
+  for (peaqPrefix of peaqPrefixes) {
+    let count = 0;
+    storage
+      .filter((i) => i[0].startsWith(peaqPrefix))
+      .some(([key, value]) => {
+        forkedSpec.genesis.raw.top[key] = value;
+        count++;
+        if (count > 50000) {
+          return true;
+        }
+        return false;
+      });
+      console.log(chalk.yellow(`Added ${count} items for prefix ${peaqPrefix}`));
+  }
 
   // Delete System.LastRuntimeUpgrade to ensure that the on_runtime_upgrade event is triggered
   delete forkedSpec.genesis.raw.top['0x26aa394eea5630e07c48ae0c9558cef7f9cce9c888469bb1a0dceaa129672ef8'];
@@ -212,6 +276,7 @@ async function main() {
   }
 
   fs.writeFileSync(forkedSpecPath, JSON.stringify(forkedSpec, null, 4));
+  // await writeLargeJSONFile(forkedSpecPath, forkedSpec);
 
   console.log('Forked genesis generated successfully. Find it at ./data/fork.json');
   process.exit();

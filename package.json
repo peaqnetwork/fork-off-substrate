@@ -27,6 +27,8 @@
     "@polkadot/api": "^9.7.1",
     "chalk": "^4.1.2",
     "cli-progress": "^3.9.1",
-    "dotenv": "^10.0.0"
+    "dotenv": "^10.0.0",
+    "stream-json": "^1.9.1",
+    "streaming-json-stringify": "^3.1.0"
   }
 }
