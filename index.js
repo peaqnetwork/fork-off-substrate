@@ -48,14 +48,18 @@ const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_cla
  * e.g. console.log(xxhashAsHex('System', 128)).
  */
 let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371da9' /* System.Account */];
+let peaqPrefixes = [];
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
+const isPeaqPrefix = ['PeaqDid', 'PeaqStorage', 'PeaqRBAC']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
 const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
 
 async function fixParachinStates (api, forkedSpec) {
   const skippedKeys = [
-    api.query.parasScheduler.sessionStartBlock.key()
+  // The parachain didn't have the parasScheduler module, so we skip below module
+  // parasScheduler module only on relay chain, but we are forked parachain
+  //  api.query.parasScheduler.sessionStartBlock.key()
   ];
   for (const k of skippedKeys) {
     delete forkedSpec.genesis.raw.top[k];
@@ -132,6 +136,16 @@ async function main() {
       prefixes.push(xxhashAsHex(module.name, 128));
     }
   });
+  modules.forEach((module) => {
+    if (module.storage) {
+      if (!isPeaqPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping prefix for not peaq module: " + module.name.toHuman()));
+        return;
+      }
+      console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
+      peaqPrefixes.push(xxhashAsHex(module.name, 128));
+    }
+  });
 
   // Ignore this part, because we generate our own chain spec before.
   // // Generate chain spec for original and forked chains
@@ -158,6 +172,11 @@ async function main() {
   // Grab the items to be moved, then iterate through and insert into storage
   storage
     .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
+    .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
+
+  storage
+    .filter((i) => peaqPrefixes.some((prefix) => i[0].startsWith(prefix)))
+    .slice(0, 10000)
     .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
 
   // Delete System.LastRuntimeUpgrade to ensure that the on_runtime_upgrade event is triggered
