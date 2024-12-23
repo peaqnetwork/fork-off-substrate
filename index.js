@@ -132,6 +132,10 @@ async function main() {
         console.log(chalk.yellow("Skipping parachain prefix for module: " + module.name.toHuman()));
         return;
       }
+      if (isPeaqPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping prefix for peaq module: " + module.name.toHuman()));
+        return;
+      }
       console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
       prefixes.push(xxhashAsHex(module.name, 128));
     }
@@ -176,7 +180,7 @@ async function main() {
 
   storage
     .filter((i) => peaqPrefixes.some((prefix) => i[0].startsWith(prefix)))
-    .slice(0, 10000)
+    .slice(0, 50000)
     .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
 
   // Delete System.LastRuntimeUpgrade to ensure that the on_runtime_upgrade event is triggered
