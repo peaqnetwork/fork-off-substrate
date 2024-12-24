@@ -51,8 +51,10 @@ const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_cla
  * e.g. console.log(xxhashAsHex('System', 128)).
  */
 let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371da9' /* System.Account */];
+let peaqPrefixes = [];
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
+const isPeaqPrefix = ['PeaqDid', 'PeaqStorage', 'PeaqRbac']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
 const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
 
@@ -91,90 +93,6 @@ async function processLargeJSONFile(filePath) {
       reject(err);
     });
   });
-}
-
-async function writeLargeJSONFile(filePath, data, chunkSize = 1000) {
-  return new Promise((resolve, reject) => {
-    const writeStream = fs.createWriteStream(filePath);
-
-    writeStream.write('{\n');
-
-    const keys = Object.keys(data);
-    keys.forEach((key, index) => {
-      if (key === 'genesis') {
-        writeStream.write(`  "${key}": {\n`);
-        const genesisKeys = Object.keys(data.genesis);
-
-        genesisKeys.forEach((genesisKey, genesisIndex) => {
-          if (genesisKey === 'raw') {
-            writeStream.write(`    "${genesisKey}": {\n`);
-            const rawKeys = Object.keys(data.genesis.raw);
-
-            rawKeys.forEach((rawKey, rawIndex) => {
-              if (rawKey === 'top') {
-                writeStream.write(`      "${rawKey}": {\n`);
-
-                const topEntries = Object.entries(data.genesis.raw.top);
-                for (let i = 0; i < topEntries.length; i += chunkSize) {
-                  const chunk = topEntries.slice(i, i + chunkSize);
-                  chunk.forEach(([topKey, topValue], chunkIndex) => {
-                    writeStream.write(
-                      `        "${topKey}": ${JSON.stringify(topValue)}${
-                        i + chunkIndex + 1 < topEntries.length ? ',' : ''
-                      }\n`
-                    );
-                  });
-                }
-
-                writeStream.write('      }');
-              } else {
-                writeStream.write(
-                  `      "${rawKey}": ${JSON.stringify(
-                    data.genesis.raw[rawKey],
-                    null,
-                    2
-                  )}`
-                );
-              }
-              if (rawIndex < rawKeys.length - 1) writeStream.write(',\n');
-            });
-
-            writeStream.write('\n    }');
-          } else {
-            writeStream.write(
-              `    "${genesisKey}": ${JSON.stringify(
-                data.genesis[genesisKey],
-                null,
-                2
-              )}`
-            );
-          }
-          if (genesisIndex < genesisKeys.length - 1) writeStream.write(',\n');
-        });
-
-        writeStream.write('\n  }');
-      } else {
-        writeStream.write(
-          `  "${key}": ${JSON.stringify(data[key], null, 2)}`
-        );
-      }
-      if (index < keys.length - 1) writeStream.write(',\n');
-    });
-
-    writeStream.write('\n}');
-    writeStream.end();
-
-    writeStream.on('finish', () => {
-      console.log('JSON out finished:', filePath);
-      resolve();
-    });
-
-    writeStream.on('error', (err) => {
-      console.error('Error:', err);
-      reject(err);
-    });
-  });
-
 }
 
 async function main() {
@@ -243,8 +161,22 @@ async function main() {
         console.log(chalk.yellow("Skipping parachain prefix for module: " + module.name.toHuman()));
         return;
       }
+      if (isPeaqPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping prefix for peaq module: " + module.name.toHuman()));
+        return;
+      }
       console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
       prefixes.push(xxhashAsHex(module.name, 128));
+    }
+  });
+  modules.forEach((module) => {
+    if (module.storage) {
+      if (!isPeaqPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping prefix for not peaq module: " + module.name.toHuman()));
+        return;
+      }
+      console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
+      peaqPrefixes.push(xxhashAsHex(module.name, 128));
     }
   });
 
@@ -275,6 +207,21 @@ async function main() {
     .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
     .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
 
+  for (peaqPrefix of peaqPrefixes) {
+    let count = 0;
+    storage
+      .filter((i) => i[0].startsWith(peaqPrefix))
+      .some(([key, value]) => {
+        forkedSpec.genesis.raw.top[key] = value;
+        count++;
+        if (count > 50000) {
+          return true;
+        }
+        return false;
+      });
+      console.log(chalk.yellow(`Added ${count} items for prefix ${peaqPrefix}`));
+  }
+
   // Delete System.LastRuntimeUpgrade to ensure that the on_runtime_upgrade event is triggered
   delete forkedSpec.genesis.raw.top['0x26aa394eea5630e07c48ae0c9558cef7f9cce9c888469bb1a0dceaa129672ef8'];
 
@@ -303,8 +250,7 @@ async function main() {
     forkedSpec.genesis.raw.top['0x5c0d1176a568c1f92944340dbfed9e9c530ebca703c85910e7164cb7d1c9e47b'] = '0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d';
   }
 
-  // fs.writeFileSync(forkedSpecPath, JSON.stringify(forkedSpec, null, 4));
-  await writeLargeJSONFile(forkedSpecPath, forkedSpec);
+  fs.writeFileSync(forkedSpecPath, JSON.stringify(forkedSpec, null, 4));
 
   console.log('Forked genesis generated successfully. Find it at ./data/fork.json');
   process.exit();
