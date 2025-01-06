@@ -6,6 +6,9 @@ require("dotenv").config();
 const { ApiPromise } = require('@polkadot/api');
 const { HttpProvider } = require('@polkadot/rpc-provider');
 const { xxhashAsHex } = require('@polkadot/util-crypto');
+const { chain } = require('stream-chain');
+const { parser } = require('stream-json');
+const { streamArray } = require('stream-json/streamers/StreamArray');
 const execFileSync = require('child_process').execFileSync;
 const execSync = require('child_process').execSync;
 const binaryPath = path.join(__dirname, 'data', 'binary');
@@ -48,18 +51,48 @@ const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_cla
  * e.g. console.log(xxhashAsHex('System', 128)).
  */
 let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371da9' /* System.Account */];
+let peaqPrefixes = [];
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
+const isPeaqPrefix = ['PeaqDid', 'PeaqStorage', 'PeaqRbac']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
 const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
 
 async function fixParachinStates (api, forkedSpec) {
   const skippedKeys = [
-    api.query.parasScheduler.sessionStartBlock.key()
+  // The parachain didn't have the parasScheduler module, so we skip below module
+  // parasScheduler module only on relay chain, but we are forked parachain
+  // api.query.parasScheduler.sessionStartBlock.key()
   ];
   for (const k of skippedKeys) {
     delete forkedSpec.genesis.raw.top[k];
   }
+}
+
+async function processLargeJSONFile(filePath) {
+  const results = [];
+
+  return new Promise((resolve, reject) => {
+    const pipeline = chain([
+      fs.createReadStream(filePath),
+      parser(),
+      streamArray(),
+    ]);
+
+    pipeline.on('data', ({ value }) => {
+      results.push(value);
+    });
+
+    pipeline.on('end', () => {
+      console.log('File processing completed');
+      resolve(results);
+    });
+
+    pipeline.on('error', (err) => {
+      console.error('Error processing file:', err);
+      reject(err);
+    });
+  });
 }
 
 async function main() {
@@ -128,8 +161,22 @@ async function main() {
         console.log(chalk.yellow("Skipping parachain prefix for module: " + module.name.toHuman()));
         return;
       }
+      if (isPeaqPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping prefix for peaq module: " + module.name.toHuman()));
+        return;
+      }
       console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
       prefixes.push(xxhashAsHex(module.name, 128));
+    }
+  });
+  modules.forEach((module) => {
+    if (module.storage) {
+      if (!isPeaqPrefix.includes(module.name.toHuman())) {
+        console.log(chalk.yellow("Skipping prefix for not peaq module: " + module.name.toHuman()));
+        return;
+      }
+      console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
+      peaqPrefixes.push(xxhashAsHex(module.name, 128));
     }
   });
 
@@ -146,7 +193,7 @@ async function main() {
   //   execSync(binaryPath + ` build-spec --chain ${forkChain} --raw > ` + forkedSpecPath);
   // }
 
-  let storage = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
+  let storage = await processLargeJSONFile(storagePath);
   let originalSpec = JSON.parse(fs.readFileSync(originalSpecPath, 'utf8'));
   let forkedSpec = JSON.parse(fs.readFileSync(forkedSpecPath, 'utf8'));
 
@@ -159,6 +206,21 @@ async function main() {
   storage
     .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
     .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
+
+  for (peaqPrefix of peaqPrefixes) {
+    let count = 0;
+    storage
+      .filter((i) => i[0].startsWith(peaqPrefix))
+      .some(([key, value]) => {
+        forkedSpec.genesis.raw.top[key] = value;
+        count++;
+        if (count > 50000) {
+          return true;
+        }
+        return false;
+      });
+      console.log(chalk.yellow(`Added ${count} items for prefix ${peaqPrefix}`));
+  }
 
   // Delete System.LastRuntimeUpgrade to ensure that the on_runtime_upgrade event is triggered
   delete forkedSpec.genesis.raw.top['0x26aa394eea5630e07c48ae0c9558cef7f9cce9c888469bb1a0dceaa129672ef8'];
