@@ -2,7 +2,7 @@
 
 SOURCE_PATH=${SOURCE_PATH}
 OUTPUT_PATH=${SOURCE_PATH}/output
-RPC_ENDPOINT=${RPC_ENDPOINT:-"https://rpcpc1-qa.agung.peaq.network"}
+RPC_ENDPOINT=${RPC_ENDPOINT:-"https://wss-async.agung.peaq.network"}
 ALICE=${ALICE:-"1"}
 KEEP_COLLATOR=${KEEP_COLLATOR:-"false"}
 IGNORE_WASM_UPDATE=${IGNORE_WASM_UPDATE:-"true"}
