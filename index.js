@@ -4,7 +4,7 @@ const chalk = require('chalk');
 const cliProgress = require('cli-progress');
 require("dotenv").config();
 const { ApiPromise } = require('@polkadot/api');
-const { HttpProvider } = require('@polkadot/rpc-provider');
+const { WsProvider } = require('@polkadot/rpc-provider');
 const { xxhashAsHex } = require('@polkadot/util-crypto');
 const { chain } = require('stream-chain');
 const { parser } = require('stream-json');
@@ -20,7 +20,7 @@ const forkedSpecPath = path.join(__dirname, 'data', 'fork.json');
 const storagePath = path.join(__dirname, 'data', 'storage.json');
 
 // Using http endpoint since substrate's Ws endpoint has a size limit.
-const provider = new HttpProvider(process.env.HTTP_RPC_ENDPOINT || 'http://localhost:9933')
+const provider = new WsProvider(process.env.HTTP_RPC_ENDPOINT || 'http://localhost:9933')
 // The storage download will be split into 256^chunksLevel chunks.
 const chunksLevel = process.env.FORK_CHUNKS_LEVEL || 1;
 const totalChunks = Math.pow(256, chunksLevel);
@@ -32,6 +32,7 @@ const keepCollator = process.env.KEEP_COLLATOR === 'true';
 const keepAsset = process.env.KEEP_ASSET === 'true';
 const keepParachain = process.env.KEEP_PARACHAIN === 'true';
 const ignoreWASMUpdate = process.env.IGNORE_WASM_UPDATE === 'true';
+const pageSize = process.env.PAGE_SIZE || 100;
 
 let chunksFetched = 0;
 let separator = false;
@@ -111,7 +112,7 @@ async function main() {
   }
 
   let api;
-  console.log(chalk.green('We are intentionally using the HTTP endpoint. If you see any warnings about that, please ignore them.'));
+  console.log(chalk.green('We are intentionally using the WSS endpoint. If you see any warnings about that, please ignore them.'));
   if (!fs.existsSync(schemaPath)) {
     console.log(chalk.yellow('Custom Schema missing, using default schema.'));
 
@@ -260,10 +261,25 @@ main();
 
 async function fetchChunks(prefix, levelsRemaining, stream, at) {
   if (levelsRemaining <= 0) {
-    const pairs = await provider.send('state_getPairs', [prefix, at]);
-    if (pairs.length > 0) {
-      separator ? stream.write(",") : separator = true;
-      stream.write(JSON.stringify(pairs).slice(1, -1));
+    let startKey = null;
+    while (true) {
+      const keys = await provider.send('state_getKeysPaged', [prefix, pageSize, startKey, at]);
+      if (keys.length > 0) {
+        let pairs = [];
+        await Promise.all(keys.map(async (key) => {
+          const value = await provider.send('state_getStorage', [key, at]);
+          pairs.push([key, value]);
+        }));
+
+        separator ? stream.write(",") : separator = true;
+        stream.write(JSON.stringify(pairs).slice(1, -1));
+
+        startKey = keys[keys.length - 1];
+      }
+
+      if (keys.length < pageSize) {
+        break;
+      }
     }
     progressBar.update(++chunksFetched);
     return;
