@@ -96,7 +96,7 @@ should be also based on the krest-v0.0.3
 ```
 env ALICE=1 \
 SOURCE_PATH="/home/jaypan/Work/peaq/fork-test/fork-binary/peaq-dev-v06042023" \
-RPC_ENDPOINT="https://rpcpc1-qa.agung.peaq.network" \
+RPC_ENDPOINT="https://wss-async.agung.peaq.network" \
 sh forked.generated.sh;
 
 env ALICE=1 \
