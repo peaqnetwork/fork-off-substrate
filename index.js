@@ -32,7 +32,8 @@ const keepCollator = process.env.KEEP_COLLATOR === 'true';
 const keepAsset = process.env.KEEP_ASSET === 'true';
 const keepParachain = process.env.KEEP_PARACHAIN === 'true';
 const ignoreWASMUpdate = process.env.IGNORE_WASM_UPDATE === 'true';
-const pageSize = process.env.PAGE_SIZE || 100;
+const pageSize = process.env.PAGE_SIZE || 1000;
+const BATCH_SIZE = 10000;
 
 let chunksFetched = 0;
 let separator = false;
@@ -55,7 +56,8 @@ let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371
 let peaqPrefixes = [];
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
-const isPeaqPrefix = ['PeaqDid', 'PeaqStorage', 'PeaqRbac']
+const isPeaqPrefix = []
+// const isPeaqPrefix = ['PeaqDid', 'PeaqStorage', 'PeaqRbac']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
 const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
 
@@ -94,6 +96,109 @@ async function processLargeJSONFile(filePath) {
       reject(err);
     });
   });
+}
+
+async function writeLargeJSONFile(filePath, object) {
+    return new Promise((resolve, reject) => {
+        const writableStream = fs.createWriteStream(filePath, { flags: "w" });
+
+        // Write safely with backpressure handling
+        async function writeDataSafely(data) {
+            return new Promise((resolve) => {
+                if (!writableStream.write(data)) {
+                    writableStream.once("drain", resolve);
+                } else {
+                    resolve();
+                }
+            });
+        }
+
+        async function writeChunk(key, value, depth = 1, isFirstOfObject = false) {
+            const indent = '  '.repeat(depth);
+            if (!isFirstOfObject) await writeDataSafely(',\n');
+
+            const chunk = `${indent}"${key}": `;
+
+            if (Array.isArray(value)) {
+                await writeDataSafely(chunk + JSON.stringify(value));
+            } else if (typeof value === 'object' && value !== null) {
+                const entries = Object.entries(value);
+                if (entries.length === 0) {
+                    await writeDataSafely(chunk + '{}');
+                } else {
+                    await writeDataSafely(chunk + '{\n');
+                    let isFirstSubKey = true;
+                    for (const [subKey, subValue] of entries) {
+                        await writeChunk(subKey, subValue, depth + 1, isFirstSubKey);
+                        isFirstSubKey = false;
+                    }
+                    await writeDataSafely(`\n${indent}}`);
+                }
+            } else {
+                await writeDataSafely(chunk + JSON.stringify(value));
+            }
+        }
+
+        let hasGenesis = false;
+        let childrenDefault = {};
+
+        (async () => {
+            // ✅ Ensure the first `{` is written before starting
+            await writeDataSafely('{\n');
+
+            let isFirstKey = true;
+            for (const [key, value] of Object.entries(object)) {
+                if (key === "genesis" && value.raw && value.raw.top) {
+                    hasGenesis = true;
+                    if (value.raw.childrenDefault) {
+                        childrenDefault = value.raw.childrenDefault;
+                    }
+                    continue;
+                }
+                await writeChunk(key, value, 1, isFirstKey);
+                isFirstKey = false;
+            }
+
+            if (hasGenesis) {
+                await writeDataSafely(',\n  "genesis": {\n');
+                await writeDataSafely('    "raw": {\n');
+                await writeDataSafely('      "top": {\n');
+
+                let isFirstTopKey = true;
+                const BATCH_SIZE = 500;
+                const topEntries = Object.entries(object.genesis.raw.top);
+
+                for (let i = 0; i < topEntries.length; i += BATCH_SIZE) {
+                    const batch = topEntries.slice(i, i + BATCH_SIZE);
+
+                    for (const [topKey, topValue] of batch) {
+                        if (!isFirstTopKey) await writeDataSafely(',\n');
+                        isFirstTopKey = false;
+                        await writeDataSafely(`        "${topKey}": ${JSON.stringify(topValue)}`);
+                    }
+                }
+
+                await writeDataSafely('\n      },\n');
+                await writeDataSafely(`      "childrenDefault": ${JSON.stringify(childrenDefault, null, 6)}`);
+                await writeDataSafely('\n    }\n');
+                await writeDataSafely('  }');
+            }
+
+            // ✅ Ensure the last `}` is written
+            await writeDataSafely('\n}\n');
+            writableStream.end();
+        })();
+
+        writableStream.on("finish", () => {
+            console.log("✅ JSON file writing completed!");
+            resolve();
+        });
+
+        writableStream.on("error", (err) => {
+            console.error("❌ Error writing JSON file:", err);
+            reject(err);
+        });
+    });
 }
 
 async function main() {
@@ -205,8 +310,10 @@ async function main() {
 
   // Grab the items to be moved, then iterate through and insert into storage
   storage
-    .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
-    .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
+  .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
+  .forEach(([key, value]) => {
+    forkedSpec.genesis.raw.top[key] = value;
+  });
 
   for (peaqPrefix of peaqPrefixes) {
     let count = 0;
@@ -251,9 +358,11 @@ async function main() {
     forkedSpec.genesis.raw.top['0x5c0d1176a568c1f92944340dbfed9e9c530ebca703c85910e7164cb7d1c9e47b'] = '0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d';
   }
 
-  fs.writeFileSync(forkedSpecPath, JSON.stringify(forkedSpec, null, 4));
+  console.log(forkedSpec.genesis.raw.top['0x1da53b775b270400e7e61ed5cbc5a146ab1160471b1418779239ba8e2b847e420008aaa5f29e1c03c00cdf7820c6052212d006bcb630ff948725d1df341b725e2257e5b367f349e7cacb7e8c8962e658149eafea616447fa76ace8ac47b24d941356bcce22fd1612ef5f5220111a549fc4140759']);
+  await writeLargeJSONFile(forkedSpecPath, forkedSpec);
+  // fs.writeFileSync(forkedSpecPath, JSON.stringify(forkedSpec, null, 4));
 
-  console.log('Forked genesis generated successfully. Find it at ./data/fork.json');
+  console.log(`Forked genesis generated successfully. Find it at ${forkedSpecPath}`);
   process.exit();
 }
 

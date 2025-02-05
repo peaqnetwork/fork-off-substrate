@@ -113,3 +113,5 @@ sh -x forked.generated.sh;
 ## Note:
 1. We have to install subwasm https://github.com/chevdor/subwasm/releases
 2. People can use KEEP_COLLATOR and KEEP_PARACHAIN to control the forked pallet
+3. OVERRIDE_STORAGE_PATH is used to override the storage path because now the peaq mainnet need about 4G to download the
+key
