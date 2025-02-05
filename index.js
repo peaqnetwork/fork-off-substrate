@@ -326,9 +326,7 @@ async function main() {
     forkedSpec.genesis.raw.top['0x5c0d1176a568c1f92944340dbfed9e9c530ebca703c85910e7164cb7d1c9e47b'] = '0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d';
   }
 
-  console.log(forkedSpec.genesis.raw.top['0x1da53b775b270400e7e61ed5cbc5a146ab1160471b1418779239ba8e2b847e420008aaa5f29e1c03c00cdf7820c6052212d006bcb630ff948725d1df341b725e2257e5b367f349e7cacb7e8c8962e658149eafea616447fa76ace8ac47b24d941356bcce22fd1612ef5f5220111a549fc4140759']);
   await writeLargeJSONFile(forkedSpecPath, forkedSpec);
-  // fs.writeFileSync(forkedSpecPath, JSON.stringify(forkedSpec, null, 4));
 
   console.log(`Forked genesis generated successfully. Find it at ${forkedSpecPath}`);
   process.exit();
