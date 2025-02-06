@@ -4,7 +4,7 @@
   "description": "This script allows bootstrapping a new substrate chain with the current state of a live chain",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node --max-old-space-size=8192 index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

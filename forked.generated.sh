@@ -2,14 +2,18 @@
 
 SOURCE_PATH=${SOURCE_PATH}
 OUTPUT_PATH=${SOURCE_PATH}/output
-RPC_ENDPOINT=${RPC_ENDPOINT:-"https://wss-async.agung.peaq.network"}
+RPC_ENDPOINT=${RPC_ENDPOINT:-"wss://wss-agung.peaq.network"}
 ALICE=${ALICE:-"1"}
 KEEP_COLLATOR=${KEEP_COLLATOR:-"false"}
 IGNORE_WASM_UPDATE=${IGNORE_WASM_UPDATE:-"true"}
+OVERRIDE_STORAGE_PATH=${OVERRIDE_STORAGE_PATH:-""}
 
 # 0. Reset
 rm -rf data || true
 mkdir -p data
+if [ ! -z "$OVERRIDE_STORAGE_PATH" ]; then
+  ln -s $OVERRIDE_STORAGE_PATH data/storage.json
+fi
 
 # 1. Setup the same binary file we used in the current chain
 if [ ! -f $SOURCE_PATH/peaq-node ]; then

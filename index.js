@@ -4,7 +4,7 @@ const chalk = require('chalk');
 const cliProgress = require('cli-progress');
 require("dotenv").config();
 const { ApiPromise } = require('@polkadot/api');
-const { HttpProvider } = require('@polkadot/rpc-provider');
+const { WsProvider } = require('@polkadot/rpc-provider');
 const { xxhashAsHex } = require('@polkadot/util-crypto');
 const { chain } = require('stream-chain');
 const { parser } = require('stream-json');
@@ -20,7 +20,7 @@ const forkedSpecPath = path.join(__dirname, 'data', 'fork.json');
 const storagePath = path.join(__dirname, 'data', 'storage.json');
 
 // Using http endpoint since substrate's Ws endpoint has a size limit.
-const provider = new HttpProvider(process.env.HTTP_RPC_ENDPOINT || 'http://localhost:9933')
+const provider = new WsProvider(process.env.HTTP_RPC_ENDPOINT || 'http://localhost:9933')
 // The storage download will be split into 256^chunksLevel chunks.
 const chunksLevel = process.env.FORK_CHUNKS_LEVEL || 1;
 const totalChunks = Math.pow(256, chunksLevel);
@@ -32,6 +32,8 @@ const keepCollator = process.env.KEEP_COLLATOR === 'true';
 const keepAsset = process.env.KEEP_ASSET === 'true';
 const keepParachain = process.env.KEEP_PARACHAIN === 'true';
 const ignoreWASMUpdate = process.env.IGNORE_WASM_UPDATE === 'true';
+const pageSize = process.env.PAGE_SIZE || 1000;
+const BATCH_SIZE = 10000;
 
 let chunksFetched = 0;
 let separator = false;
@@ -51,10 +53,8 @@ const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_cla
  * e.g. console.log(xxhashAsHex('System', 128)).
  */
 let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371da9' /* System.Account */];
-let peaqPrefixes = [];
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
-const isPeaqPrefix = ['PeaqDid', 'PeaqStorage', 'PeaqRbac']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
 const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
 
@@ -95,6 +95,109 @@ async function processLargeJSONFile(filePath) {
   });
 }
 
+async function writeLargeJSONFile(filePath, object) {
+    return new Promise((resolve, reject) => {
+        const writableStream = fs.createWriteStream(filePath, { flags: "w" });
+
+        // Write safely with backpressure handling
+        async function writeDataSafely(data) {
+            return new Promise((resolve) => {
+                if (!writableStream.write(data)) {
+                    writableStream.once("drain", resolve);
+                } else {
+                    resolve();
+                }
+            });
+        }
+
+        async function writeChunk(key, value, depth = 1, isFirstOfObject = false) {
+            const indent = '  '.repeat(depth);
+            if (!isFirstOfObject) await writeDataSafely(',\n');
+
+            const chunk = `${indent}"${key}": `;
+
+            if (Array.isArray(value)) {
+                await writeDataSafely(chunk + JSON.stringify(value));
+            } else if (typeof value === 'object' && value !== null) {
+                const entries = Object.entries(value);
+                if (entries.length === 0) {
+                    await writeDataSafely(chunk + '{}');
+                } else {
+                    await writeDataSafely(chunk + '{\n');
+                    let isFirstSubKey = true;
+                    for (const [subKey, subValue] of entries) {
+                        await writeChunk(subKey, subValue, depth + 1, isFirstSubKey);
+                        isFirstSubKey = false;
+                    }
+                    await writeDataSafely(`\n${indent}}`);
+                }
+            } else {
+                await writeDataSafely(chunk + JSON.stringify(value));
+            }
+        }
+
+        let hasGenesis = false;
+        let childrenDefault = {};
+
+        (async () => {
+            // ✅ Ensure the first `{` is written before starting
+            await writeDataSafely('{\n');
+
+            let isFirstKey = true;
+            for (const [key, value] of Object.entries(object)) {
+                if (key === "genesis" && value.raw && value.raw.top) {
+                    hasGenesis = true;
+                    if (value.raw.childrenDefault) {
+                        childrenDefault = value.raw.childrenDefault;
+                    }
+                    continue;
+                }
+                await writeChunk(key, value, 1, isFirstKey);
+                isFirstKey = false;
+            }
+
+            if (hasGenesis) {
+                await writeDataSafely(',\n  "genesis": {\n');
+                await writeDataSafely('    "raw": {\n');
+                await writeDataSafely('      "top": {\n');
+
+                let isFirstTopKey = true;
+                const BATCH_SIZE = 500;
+                const topEntries = Object.entries(object.genesis.raw.top);
+
+                for (let i = 0; i < topEntries.length; i += BATCH_SIZE) {
+                    const batch = topEntries.slice(i, i + BATCH_SIZE);
+
+                    for (const [topKey, topValue] of batch) {
+                        if (!isFirstTopKey) await writeDataSafely(',\n');
+                        isFirstTopKey = false;
+                        await writeDataSafely(`        "${topKey}": ${JSON.stringify(topValue)}`);
+                    }
+                }
+
+                await writeDataSafely('\n      },\n');
+                await writeDataSafely(`      "childrenDefault": ${JSON.stringify(childrenDefault, null, 6)}`);
+                await writeDataSafely('\n    }\n');
+                await writeDataSafely('  }');
+            }
+
+            // ✅ Ensure the last `}` is written
+            await writeDataSafely('\n}\n');
+            writableStream.end();
+        })();
+
+        writableStream.on("finish", () => {
+            console.log("✅ JSON file writing completed!");
+            resolve();
+        });
+
+        writableStream.on("error", (err) => {
+            console.error("❌ Error writing JSON file:", err);
+            reject(err);
+        });
+    });
+}
+
 async function main() {
   if (!fs.existsSync(binaryPath)) {
     console.log(chalk.red('Binary missing. Please copy the binary of your substrate node to the data folder and rename the binary to "binary"'));
@@ -111,7 +214,7 @@ async function main() {
   }
 
   let api;
-  console.log(chalk.green('We are intentionally using the HTTP endpoint. If you see any warnings about that, please ignore them.'));
+  console.log(chalk.green('We are intentionally using the WSS endpoint. If you see any warnings about that, please ignore them.'));
   if (!fs.existsSync(schemaPath)) {
     console.log(chalk.yellow('Custom Schema missing, using default schema.'));
 
@@ -161,22 +264,8 @@ async function main() {
         console.log(chalk.yellow("Skipping parachain prefix for module: " + module.name.toHuman()));
         return;
       }
-      if (isPeaqPrefix.includes(module.name.toHuman())) {
-        console.log(chalk.yellow("Skipping prefix for peaq module: " + module.name.toHuman()));
-        return;
-      }
       console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
       prefixes.push(xxhashAsHex(module.name, 128));
-    }
-  });
-  modules.forEach((module) => {
-    if (module.storage) {
-      if (!isPeaqPrefix.includes(module.name.toHuman())) {
-        console.log(chalk.yellow("Skipping prefix for not peaq module: " + module.name.toHuman()));
-        return;
-      }
-      console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
-      peaqPrefixes.push(xxhashAsHex(module.name, 128));
     }
   });
 
@@ -204,23 +293,10 @@ async function main() {
 
   // Grab the items to be moved, then iterate through and insert into storage
   storage
-    .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
-    .forEach(([key, value]) => (forkedSpec.genesis.raw.top[key] = value));
-
-  for (peaqPrefix of peaqPrefixes) {
-    let count = 0;
-    storage
-      .filter((i) => i[0].startsWith(peaqPrefix))
-      .some(([key, value]) => {
-        forkedSpec.genesis.raw.top[key] = value;
-        count++;
-        if (count > 50000) {
-          return true;
-        }
-        return false;
-      });
-      console.log(chalk.yellow(`Added ${count} items for prefix ${peaqPrefix}`));
-  }
+  .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
+  .forEach(([key, value]) => {
+    forkedSpec.genesis.raw.top[key] = value;
+  });
 
   // Delete System.LastRuntimeUpgrade to ensure that the on_runtime_upgrade event is triggered
   delete forkedSpec.genesis.raw.top['0x26aa394eea5630e07c48ae0c9558cef7f9cce9c888469bb1a0dceaa129672ef8'];
@@ -250,9 +326,9 @@ async function main() {
     forkedSpec.genesis.raw.top['0x5c0d1176a568c1f92944340dbfed9e9c530ebca703c85910e7164cb7d1c9e47b'] = '0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d';
   }
 
-  fs.writeFileSync(forkedSpecPath, JSON.stringify(forkedSpec, null, 4));
+  await writeLargeJSONFile(forkedSpecPath, forkedSpec);
 
-  console.log('Forked genesis generated successfully. Find it at ./data/fork.json');
+  console.log(`Forked genesis generated successfully. Find it at ${forkedSpecPath}`);
   process.exit();
 }
 
@@ -260,10 +336,25 @@ main();
 
 async function fetchChunks(prefix, levelsRemaining, stream, at) {
   if (levelsRemaining <= 0) {
-    const pairs = await provider.send('state_getPairs', [prefix, at]);
-    if (pairs.length > 0) {
-      separator ? stream.write(",") : separator = true;
-      stream.write(JSON.stringify(pairs).slice(1, -1));
+    let startKey = null;
+    while (true) {
+      const keys = await provider.send('state_getKeysPaged', [prefix, pageSize, startKey, at]);
+      if (keys.length > 0) {
+        let pairs = [];
+        await Promise.all(keys.map(async (key) => {
+          const value = await provider.send('state_getStorage', [key, at]);
+          pairs.push([key, value]);
+        }));
+
+        separator ? stream.write(",") : separator = true;
+        stream.write(JSON.stringify(pairs).slice(1, -1));
+
+        startKey = keys[keys.length - 1];
+      }
+
+      if (keys.length < pageSize) {
+        break;
+      }
     }
     progressBar.update(++chunksFetched);
     return;
