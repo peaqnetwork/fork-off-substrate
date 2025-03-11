@@ -33,8 +33,8 @@ const keepAsset = process.env.KEEP_ASSET === 'true';
 const keepParachain = process.env.KEEP_PARACHAIN === 'true';
 const ignoreWASMUpdate = process.env.IGNORE_WASM_UPDATE === 'true';
 const pageSize = process.env.PAGE_SIZE || 1000;
+const noIgnoreSize = process.env.NO_IGNORE_SIZE || 100000;
 const BATCH_SIZE = 10000;
-const NO_IGNORE_SIZE = 100000;
 
 let chunksFetched = 0;
 let separator = false;
@@ -387,7 +387,7 @@ async function fetchChunks(prefix, levelsRemaining, stream, at) {
         let found_peaq_prefix_key = peaqIgnorePrefixes.find(prefix => startKey.startsWith(prefix));
         no_skip_size += keys.length;
         console.log(`Found peaq prefix key: ${found_peaq_prefix_key}, no skip size: ${no_skip_size}`);
-        if (found_peaq_prefix_key && no_skip_size > NO_IGNORE_SIZE) {
+        if (found_peaq_prefix_key && no_skip_size > noIgnoreSize) {
           new_prefix = get_next_prefix(found_peaq_prefix_key);
           console.log(`New prefix: ${new_prefix}, old prefix: ${prefix}`);
           prefix = new_prefix;
