@@ -34,6 +34,7 @@ const keepParachain = process.env.KEEP_PARACHAIN === 'true';
 const ignoreWASMUpdate = process.env.IGNORE_WASM_UPDATE === 'true';
 const pageSize = process.env.PAGE_SIZE || 1000;
 const BATCH_SIZE = 10000;
+const NO_IGNORE_SIZE = 100000;
 
 let chunksFetched = 0;
 let separator = false;
@@ -53,6 +54,13 @@ const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_cla
  * e.g. console.log(xxhashAsHex('System', 128)).
  */
 let prefixes = ['0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371da9' /* System.Account */];
+const peaqIgnorePrefixes = [
+  '0x50b1bab256dbd966f3aa4c23d3a7a201', // PeaqDid
+  '0xa94f76f4d854c6324f9c16806bea637a', // PeaqStorage
+  '0x61c5c8e4cdb377abf7410e192c83b647', // PeaqRbac
+  '0x1da53b775b270400e7e61ed5cbc5a146' // EVM
+];
+
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
@@ -198,6 +206,21 @@ async function writeLargeJSONFile(filePath, object) {
     });
 }
 
+function get_next_prefix(prefix) {
+  let hexString = prefix.startsWith("0x")
+      ? prefix.slice(2)
+      : prefix;
+
+  let incrementedHex = (BigInt("0x" + hexString) + BigInt(1)).toString(16);
+
+  while (incrementedHex.length < hexString.length) {
+      incrementedHex = "0" + incrementedHex;
+  }
+
+  let newKey = "0x" + incrementedHex;
+  return newKey;
+}
+
 async function main() {
   if (!fs.existsSync(binaryPath)) {
     console.log(chalk.red('Binary missing. Please copy the binary of your substrate node to the data folder and rename the binary to "binary"'));
@@ -337,19 +360,40 @@ main();
 async function fetchChunks(prefix, levelsRemaining, stream, at) {
   if (levelsRemaining <= 0) {
     let startKey = null;
+    let no_skip_size = 0;
     while (true) {
       const keys = await provider.send('state_getKeysPaged', [prefix, pageSize, startKey, at]);
       if (keys.length > 0) {
         let pairs = [];
-        await Promise.all(keys.map(async (key) => {
-          const value = await provider.send('state_getStorage', [key, at]);
-          pairs.push([key, value]);
-        }));
+        await Promise.all(
+          keys
+            .map(async (key) => {
+              const value = await provider.send('state_getStorage', [key, at]);
+              pairs.push([key, value]);
+            })
+        );
 
-        separator ? stream.write(",") : separator = true;
-        stream.write(JSON.stringify(pairs).slice(1, -1));
-
+        if (pairs.length > 0) {
+          separator ? stream.write(",") : (separator = true);
+          stream.write(JSON.stringify(pairs).slice(1, -1));
+        }
         startKey = keys[keys.length - 1];
+        let found_ignore_prefix_key = peaqIgnorePrefixes.some(prefix => startKey.startsWith(prefix));
+
+        if (!found_ignore_prefix_key) {
+          continue;
+        }
+        console.log(`Found ignore prefix key: ${found_ignore_prefix_key}`);
+        let found_peaq_prefix_key = peaqIgnorePrefixes.find(prefix => startKey.startsWith(prefix));
+        no_skip_size += keys.length;
+        console.log(`Found peaq prefix key: ${found_peaq_prefix_key}, no skip size: ${no_skip_size}`);
+        if (found_peaq_prefix_key && no_skip_size > NO_IGNORE_SIZE) {
+          new_prefix = get_next_prefix(found_peaq_prefix_key);
+          console.log(`New prefix: ${new_prefix}, old prefix: ${prefix}`);
+          prefix = new_prefix;
+          startKey = null;
+          no_skip_size = 0;
+        }
       }
 
       if (keys.length < pageSize) {
