@@ -65,6 +65,7 @@ const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'F
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
 const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'ParachainStaking', 'Session'];
 const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
+const addedModulesprefix = ['Erc20Instance0Balances'];
 
 async function fixParachinStates (api, forkedSpec) {
   const skippedKeys = [
@@ -290,6 +291,9 @@ async function main() {
       console.log(chalk.yellow("Adding prefix for module: " + module.name.toHuman()));
       prefixes.push(xxhashAsHex(module.name, 128));
     }
+  });
+  addedModulesprefix.forEach((module) => {
+    prefixes.push(xxhashAsHex(module, 128));
   });
 
   // Ignore this part, because we generate our own chain spec before.
