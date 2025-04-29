@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 
 ARG SUBWASM_VERSION=0.14.1
 
@@ -15,6 +15,9 @@ RUN curl -sL https://deb.nodesource.com/setup_16.x | bash
 RUN apt install nodejs && npm install -g npm
 RUN node -v; npm -v;
 
+# This is a temporary workarround to tackle a bug. See:
+# https://bugs.launchpad.net/cloud-images/+bug/2005129
+RUN userdel -r ubuntu
 RUN useradd -m -u 1000 -U -s /bin/sh forker && \
     mkdir -p /data && \
     chown -R forker:forker /data
