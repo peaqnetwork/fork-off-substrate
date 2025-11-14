@@ -26,7 +26,11 @@ This script allows bootstrapping a new substrate chain with the current state of
 
 6. Either run a full node for your blockchain locally(Recommended) or have an external endpoint handy.
 
-7. Run the script
+7. Run the script. You can add a list of smart contracts that you want to fork like this: 
+    ```bash
+    CONTRACT_ADDRESSES="0x1234567890123456789012345678901234567890,0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    ```
+
     * If using a local node, simply run the script using
 
         ```bash
