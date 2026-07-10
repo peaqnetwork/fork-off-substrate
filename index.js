@@ -351,6 +351,28 @@ async function main() {
   if (alice !== '') {
     // Set sudo key to //Alice
     forkedSpec.genesis.raw.top['0x5c0d1176a568c1f92944340dbfed9e9c530ebca703c85910e7164cb7d1c9e47b'] = '0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d';
+
+    // Seed the runtime-upgrade funding SOURCE (crane) with balance directly at the storage layer,
+    // so peaq-bc-test's normal fund_account() flow runs end-to-end instead of being bypassed:
+    // fund_sudo_account transfers crane -> //Alice sudo, then Alice sudo-funds the downstream dev
+    // accounts (Bob/Charlie/Dave/Eve/Ferdie + stashes) via fund_all_retated_accounts. On a fresh
+    // fork no dev account holds funds, so that flow deadlocks (need funds to send funds); writing
+    // balance in genesis storage seeds the source and breaks the chicken-and-egg.
+    // It MUST be crane (the loop's first source): when crane is unfunded the loop `break`s before
+    // reaching Ferdie (runtime_upgrade.py:167-169), so seeding Ferdie would never be reached.
+    // Account: crane = 5DWjSbyFcDpSsifT7XscW8CCU39gkVGVmLFYyt17aFTWRYhC
+    //          ("crane scheme tourist cigar exact asthma culture lamp bacon give wish certain")
+    // Use the hardcoded on-chain System.Account storage key for crane directly. Deriving it via
+    // api.query.system.account.key(craneAccount) produced a key that did NOT match the real on-chain
+    // key, so the seeded balance never landed and fund_sudo_account still saw crane with 0 balance.
+    // Key = twox128("System") + twox128("Account") + blake2_128_concat(craneAccountId),
+    // craneAccountId = 0x4015f328d5857592252409bad110960a064175ff712a0fbf8ec9b8561f99c506.
+    const CRANE_ONCHAIN_KEY = '0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371da98770ba17e784996cab9b86ed5aadaee44015f328d5857592252409bad110960a064175ff712a0fbf8ec9b8561f99c506';
+    const craneValue = api.createType('AccountInfo', {
+      providers: 1,
+      data: { free: '1000000000000000000000000' }, // 1e24, matches force_set_balance amount used elsewhere
+    }).toHex();
+    forkedSpec.genesis.raw.top[CRANE_ONCHAIN_KEY] = craneValue;
   }
 
   await writeLargeJSONFile(forkedSpecPath, forkedSpec);
