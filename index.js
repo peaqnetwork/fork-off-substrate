@@ -36,6 +36,20 @@ const pageSize = process.env.PAGE_SIZE || 1000;
 const noIgnoreSize = process.env.NO_IGNORE_SIZE || 100000;
 const BATCH_SIZE = 10000;
 
+// Parse contract addresses to include in fork (comma-separated list)
+const contractAddressesToInclude = process.env.CONTRACT_ADDRESSES
+  ? process.env.CONTRACT_ADDRESSES.split(',').map(addr => {
+    const trimmed = addr.trim();
+    // Normalize address: remove 0x if present, ensure lowercase, pad to 40 chars (20 bytes)
+    const clean = trimmed.startsWith('0x') ? trimmed.slice(2).toLowerCase() : trimmed.toLowerCase();
+    if (clean.length !== 40) {
+      console.log(chalk.yellow(`Warning: Contract address ${trimmed} is not 20 bytes (40 hex chars), skipping`));
+      return null;
+    }
+    return clean;
+  }).filter(addr => addr !== null)
+  : [];
+
 let chunksFetched = 0;
 let separator = false;
 const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
@@ -67,11 +81,11 @@ const skippedCollatorModulesPrefix = ['Authorship', 'Aura', 'AuraExt', 'Parachai
 const skippedAssetPrefix = ['Assets', 'XcAssetConfig', 'EVM', 'Ethereum'];
 const addedModulesprefix = ['Erc20Instance0Balances'];
 
-async function fixParachinStates (api, forkedSpec) {
+async function fixParachinStates(api, forkedSpec) {
   const skippedKeys = [
-  // The parachain didn't have the parasScheduler module, so we skip below module
-  // parasScheduler module only on relay chain, but we are forked parachain
-  // api.query.parasScheduler.sessionStartBlock.key()
+    // The parachain didn't have the parasScheduler module, so we skip below module
+    // parasScheduler module only on relay chain, but we are forked parachain
+    // api.query.parasScheduler.sessionStartBlock.key()
   ];
   for (const k of skippedKeys) {
     delete forkedSpec.genesis.raw.top[k];
@@ -105,121 +119,160 @@ async function processLargeJSONFile(filePath) {
 }
 
 async function writeLargeJSONFile(filePath, object) {
-    return new Promise((resolve, reject) => {
-        const writableStream = fs.createWriteStream(filePath, { flags: "w" });
+  return new Promise((resolve, reject) => {
+    const writableStream = fs.createWriteStream(filePath, { flags: "w" });
 
-        // Write safely with backpressure handling
-        async function writeDataSafely(data) {
-            return new Promise((resolve) => {
-                if (!writableStream.write(data)) {
-                    writableStream.once("drain", resolve);
-                } else {
-                    resolve();
-                }
-            });
+    // Write safely with backpressure handling
+    async function writeDataSafely(data) {
+      return new Promise((resolve) => {
+        if (!writableStream.write(data)) {
+          writableStream.once("drain", resolve);
+        } else {
+          resolve();
+        }
+      });
+    }
+
+    async function writeChunk(key, value, depth = 1, isFirstOfObject = false) {
+      const indent = '  '.repeat(depth);
+      if (!isFirstOfObject) await writeDataSafely(',\n');
+
+      const chunk = `${indent}"${key}": `;
+
+      if (Array.isArray(value)) {
+        await writeDataSafely(chunk + JSON.stringify(value));
+      } else if (typeof value === 'object' && value !== null) {
+        const entries = Object.entries(value);
+        if (entries.length === 0) {
+          await writeDataSafely(chunk + '{}');
+        } else {
+          await writeDataSafely(chunk + '{\n');
+          let isFirstSubKey = true;
+          for (const [subKey, subValue] of entries) {
+            await writeChunk(subKey, subValue, depth + 1, isFirstSubKey);
+            isFirstSubKey = false;
+          }
+          await writeDataSafely(`\n${indent}}`);
+        }
+      } else {
+        await writeDataSafely(chunk + JSON.stringify(value));
+      }
+    }
+
+    let hasGenesis = false;
+    let childrenDefault = {};
+
+    (async () => {
+      // ✅ Ensure the first `{` is written before starting
+      await writeDataSafely('{\n');
+
+      let isFirstKey = true;
+      for (const [key, value] of Object.entries(object)) {
+        if (key === "genesis" && value.raw && value.raw.top) {
+          hasGenesis = true;
+          if (value.raw.childrenDefault) {
+            childrenDefault = value.raw.childrenDefault;
+          }
+          continue;
+        }
+        await writeChunk(key, value, 1, isFirstKey);
+        isFirstKey = false;
+      }
+
+      if (hasGenesis) {
+        await writeDataSafely(',\n  "genesis": {\n');
+        await writeDataSafely('    "raw": {\n');
+        await writeDataSafely('      "top": {\n');
+
+        let isFirstTopKey = true;
+        const BATCH_SIZE = 500;
+        const topEntries = Object.entries(object.genesis.raw.top);
+
+        for (let i = 0; i < topEntries.length; i += BATCH_SIZE) {
+          const batch = topEntries.slice(i, i + BATCH_SIZE);
+
+          for (const [topKey, topValue] of batch) {
+            if (!isFirstTopKey) await writeDataSafely(',\n');
+            isFirstTopKey = false;
+            await writeDataSafely(`        "${topKey}": ${JSON.stringify(topValue)}`);
+          }
         }
 
-        async function writeChunk(key, value, depth = 1, isFirstOfObject = false) {
-            const indent = '  '.repeat(depth);
-            if (!isFirstOfObject) await writeDataSafely(',\n');
+        await writeDataSafely('\n      },\n');
+        await writeDataSafely(`      "childrenDefault": ${JSON.stringify(childrenDefault, null, 6)}`);
+        await writeDataSafely('\n    }\n');
+        await writeDataSafely('  }');
+      }
 
-            const chunk = `${indent}"${key}": `;
+      // ✅ Ensure the last `}` is written
+      await writeDataSafely('\n}\n');
+      writableStream.end();
+    })();
 
-            if (Array.isArray(value)) {
-                await writeDataSafely(chunk + JSON.stringify(value));
-            } else if (typeof value === 'object' && value !== null) {
-                const entries = Object.entries(value);
-                if (entries.length === 0) {
-                    await writeDataSafely(chunk + '{}');
-                } else {
-                    await writeDataSafely(chunk + '{\n');
-                    let isFirstSubKey = true;
-                    for (const [subKey, subValue] of entries) {
-                        await writeChunk(subKey, subValue, depth + 1, isFirstSubKey);
-                        isFirstSubKey = false;
-                    }
-                    await writeDataSafely(`\n${indent}}`);
-                }
-            } else {
-                await writeDataSafely(chunk + JSON.stringify(value));
-            }
-        }
-
-        let hasGenesis = false;
-        let childrenDefault = {};
-
-        (async () => {
-            // ✅ Ensure the first `{` is written before starting
-            await writeDataSafely('{\n');
-
-            let isFirstKey = true;
-            for (const [key, value] of Object.entries(object)) {
-                if (key === "genesis" && value.raw && value.raw.top) {
-                    hasGenesis = true;
-                    if (value.raw.childrenDefault) {
-                        childrenDefault = value.raw.childrenDefault;
-                    }
-                    continue;
-                }
-                await writeChunk(key, value, 1, isFirstKey);
-                isFirstKey = false;
-            }
-
-            if (hasGenesis) {
-                await writeDataSafely(',\n  "genesis": {\n');
-                await writeDataSafely('    "raw": {\n');
-                await writeDataSafely('      "top": {\n');
-
-                let isFirstTopKey = true;
-                const BATCH_SIZE = 500;
-                const topEntries = Object.entries(object.genesis.raw.top);
-
-                for (let i = 0; i < topEntries.length; i += BATCH_SIZE) {
-                    const batch = topEntries.slice(i, i + BATCH_SIZE);
-
-                    for (const [topKey, topValue] of batch) {
-                        if (!isFirstTopKey) await writeDataSafely(',\n');
-                        isFirstTopKey = false;
-                        await writeDataSafely(`        "${topKey}": ${JSON.stringify(topValue)}`);
-                    }
-                }
-
-                await writeDataSafely('\n      },\n');
-                await writeDataSafely(`      "childrenDefault": ${JSON.stringify(childrenDefault, null, 6)}`);
-                await writeDataSafely('\n    }\n');
-                await writeDataSafely('  }');
-            }
-
-            // ✅ Ensure the last `}` is written
-            await writeDataSafely('\n}\n');
-            writableStream.end();
-        })();
-
-        writableStream.on("finish", () => {
-            console.log("✅ JSON file writing completed!");
-            resolve();
-        });
-
-        writableStream.on("error", (err) => {
-            console.error("❌ Error writing JSON file:", err);
-            reject(err);
-        });
+    writableStream.on("finish", () => {
+      console.log("✅ JSON file writing completed!");
+      resolve();
     });
+
+    writableStream.on("error", (err) => {
+      console.error("❌ Error writing JSON file:", err);
+      reject(err);
+    });
+  });
 }
 
 function get_next_prefix(prefix) {
   let hexString = prefix.startsWith("0x")
-      ? prefix.slice(2)
-      : prefix;
+    ? prefix.slice(2)
+    : prefix;
 
   let incrementedHex = (BigInt("0x" + hexString) + BigInt(1)).toString(16);
 
   while (incrementedHex.length < hexString.length) {
-      incrementedHex = "0" + incrementedHex;
+    incrementedHex = "0" + incrementedHex;
   }
 
   let newKey = "0x" + incrementedHex;
   return newKey;
+}
+
+/**
+ * Generate EVM storage key prefixes for specific contract addresses.
+ * EVM storage keys follow this structure:
+ * - Module prefix (EVM) + Storage item hash + Contract address (20 bytes) + [Storage slot (32 bytes) for Storages]
+ * 
+ * @param {string[]} contractAddresses - Array of contract addresses (40 hex chars, no 0x)
+ * @returns {string[]} Array of storage key prefixes to include
+ */
+function generateEVMContractPrefixes(contractAddresses) {
+  if (contractAddresses.length === 0) {
+    return [];
+  }
+
+  const evmModulePrefix = '0x1da53b775b270400e7e61ed5cbc5a146'; // EVM module prefix
+  const contractPrefixes = [];
+
+  // Generate hashes for EVM storage items
+  const accountsHash = xxhashAsHex('Accounts', 128).slice(2); // Remove 0x
+  const codesHash = xxhashAsHex('Codes', 128).slice(2);
+  const storagesHash = xxhashAsHex('Storages', 128).slice(2);
+
+  contractAddresses.forEach(address => {
+    // For Accounts: EVM_PREFIX + Accounts_HASH + address
+    const accountsPrefix = evmModulePrefix + accountsHash + address;
+    contractPrefixes.push(accountsPrefix);
+
+    // For Codes: EVM_PREFIX + Codes_HASH + address
+    const codesPrefix = evmModulePrefix + codesHash + address;
+    contractPrefixes.push(codesPrefix);
+
+    // For Storages: EVM_PREFIX + Storages_HASH + address
+    // This prefix will match all storage slots for this contract
+    const storagesPrefix = evmModulePrefix + storagesHash + address;
+    contractPrefixes.push(storagesPrefix);
+  });
+
+  return contractPrefixes;
 }
 
 async function main() {
@@ -252,6 +305,11 @@ async function main() {
     });
   }
 
+  // Generate contract prefixes for fetch
+  const contractPrefixesForFetch = contractAddressesToInclude.length > 0
+    ? generateEVMContractPrefixes(contractAddressesToInclude)
+    : [];
+
   if (fs.existsSync(storagePath)) {
     console.log(chalk.yellow('Reusing cached storage. Delete ./data/storage.json and rerun the script if you want to fetch latest storage'));
   } else {
@@ -261,7 +319,7 @@ async function main() {
     progressBar.start(totalChunks, 0);
     const stream = fs.createWriteStream(storagePath, { flags: 'a' });
     stream.write("[");
-    await fetchChunks("0x", chunksLevel, stream, at);
+    await fetchChunks("0x", chunksLevel, stream, at, contractPrefixesForFetch);
     stream.write("]");
     stream.end();
     progressBar.stop();
@@ -296,6 +354,18 @@ async function main() {
     prefixes.push(xxhashAsHex(module, 128));
   });
 
+  // Add contract prefixes to the prefixes array
+  if (contractAddressesToInclude.length > 0) {
+    console.log(chalk.green(`Including ${contractAddressesToInclude.length} specified contract(s) in fork`));
+    contractPrefixesForFetch.forEach(prefix => {
+      prefixes.push(prefix);
+    });
+    console.log(chalk.yellow(`Added ${contractPrefixesForFetch.length} storage key prefixes for specified contracts`));
+    contractAddressesToInclude.forEach((addr, idx) => {
+      console.log(chalk.cyan(`  Contract ${idx + 1}: 0x${addr}`));
+    });
+  }
+
   // Ignore this part, because we generate our own chain spec before.
   // // Generate chain spec for original and forked chains
   // if (originalChain == '') {
@@ -319,11 +389,26 @@ async function main() {
   forkedSpec.protocolId = originalSpec.protocolId;
 
   // Grab the items to be moved, then iterate through and insert into storage
+  // Include items that match any prefix, including contract-specific prefixes
+  // Reuse the contractPrefixesForFetch that was already generated
+  const contractPrefixesForFilter = contractPrefixesForFetch;
+
   storage
-  .filter((i) => prefixes.some((prefix) => i[0].startsWith(prefix)))
-  .forEach(([key, value]) => {
-    forkedSpec.genesis.raw.top[key] = value;
-  });
+    .filter((i) => {
+      const key = i[0];
+      // Include if it matches any prefix
+      if (prefixes.some((prefix) => key.startsWith(prefix))) {
+        return true;
+      }
+      // Also include if it matches a contract prefix (even if EVM is in ignore list)
+      if (contractPrefixesForFilter.length > 0 && contractPrefixesForFilter.some((prefix) => key.startsWith(prefix))) {
+        return true;
+      }
+      return false;
+    })
+    .forEach(([key, value]) => {
+      forkedSpec.genesis.raw.top[key] = value;
+    });
 
   // Delete System.LastRuntimeUpgrade to ensure that the on_runtime_upgrade event is triggered
   delete forkedSpec.genesis.raw.top['0x26aa394eea5630e07c48ae0c9558cef7f9cce9c888469bb1a0dceaa129672ef8'];
@@ -383,10 +468,11 @@ async function main() {
 
 main();
 
-async function fetchChunks(prefix, levelsRemaining, stream, at) {
+async function fetchChunks(prefix, levelsRemaining, stream, at, contractPrefixesForFetch = []) {
   if (levelsRemaining <= 0) {
     let startKey = null;
     let no_skip_size = 0;
+
     while (true) {
       const keys = await provider.send('state_getKeysPaged', [prefix, pageSize, startKey, at]);
       if (keys.length > 0) {
@@ -394,8 +480,22 @@ async function fetchChunks(prefix, levelsRemaining, stream, at) {
         await Promise.all(
           keys
             .map(async (key) => {
-              const value = await provider.send('state_getStorage', [key, at]);
-              pairs.push([key, value]);
+              // Check if this key matches a contract prefix we want to include
+              const isContractKey = contractPrefixesForFetch.length > 0 &&
+                contractPrefixesForFetch.some(contractPrefix => key.startsWith(contractPrefix));
+
+              // Always fetch contract keys, even if they're in ignore list
+              if (isContractKey) {
+                const value = await provider.send('state_getStorage', [key, at]);
+                pairs.push([key, value]);
+              } else {
+                // For non-contract keys, check if they're in ignore list
+                const found_ignore_prefix_key = peaqIgnorePrefixes.some(ignorePrefix => key.startsWith(ignorePrefix));
+                if (!found_ignore_prefix_key) {
+                  const value = await provider.send('state_getStorage', [key, at]);
+                  pairs.push([key, value]);
+                }
+              }
             })
         );
 
@@ -406,19 +506,27 @@ async function fetchChunks(prefix, levelsRemaining, stream, at) {
         startKey = keys[keys.length - 1];
         let found_ignore_prefix_key = peaqIgnorePrefixes.some(prefix => startKey.startsWith(prefix));
 
-        if (!found_ignore_prefix_key) {
+        // Check if the startKey is a contract key we want to include
+        const isContractKey = contractPrefixesForFetch.length > 0 &&
+          contractPrefixesForFetch.some(contractPrefix => startKey.startsWith(contractPrefix));
+
+        // If it's a contract key, don't skip it
+        if (isContractKey) {
+          // Continue fetching, don't skip
+        } else if (!found_ignore_prefix_key) {
           continue;
-        }
-        console.log(`Found ignore prefix key: ${found_ignore_prefix_key}`);
-        let found_peaq_prefix_key = peaqIgnorePrefixes.find(prefix => startKey.startsWith(prefix));
-        no_skip_size += keys.length;
-        console.log(`Found peaq prefix key: ${found_peaq_prefix_key}, no skip size: ${no_skip_size}`);
-        if (found_peaq_prefix_key && no_skip_size > noIgnoreSize) {
-          new_prefix = get_next_prefix(found_peaq_prefix_key);
-          console.log(`New prefix: ${new_prefix}, old prefix: ${prefix}`);
-          prefix = new_prefix;
-          startKey = null;
-          no_skip_size = 0;
+        } else {
+          console.log(`Found ignore prefix key: ${found_ignore_prefix_key}`);
+          let found_peaq_prefix_key = peaqIgnorePrefixes.find(prefix => startKey.startsWith(prefix));
+          no_skip_size += keys.length;
+          console.log(`Found peaq prefix key: ${found_peaq_prefix_key}, no skip size: ${no_skip_size}`);
+          if (found_peaq_prefix_key && no_skip_size > noIgnoreSize) {
+            new_prefix = get_next_prefix(found_peaq_prefix_key);
+            console.log(`New prefix: ${new_prefix}, old prefix: ${prefix}`);
+            prefix = new_prefix;
+            startKey = null;
+            no_skip_size = 0;
+          }
         }
       }
 
@@ -434,12 +542,12 @@ async function fetchChunks(prefix, levelsRemaining, stream, at) {
   if (process.env.QUICK_MODE && levelsRemaining == 1) {
     let promises = [];
     for (let i = 0; i < 256; i++) {
-      promises.push(fetchChunks(prefix + i.toString(16).padStart(2, "0"), levelsRemaining - 1, stream, at));
+      promises.push(fetchChunks(prefix + i.toString(16).padStart(2, "0"), levelsRemaining - 1, stream, at, contractPrefixesForFetch));
     }
     await Promise.all(promises);
   } else {
     for (let i = 0; i < 256; i++) {
-      await fetchChunks(prefix + i.toString(16).padStart(2, "0"), levelsRemaining - 1, stream, at);
+      await fetchChunks(prefix + i.toString(16).padStart(2, "0"), levelsRemaining - 1, stream, at, contractPrefixesForFetch);
     }
   }
 }
