@@ -4,7 +4,7 @@ const chalk = require('chalk');
 const cliProgress = require('cli-progress');
 require("dotenv").config();
 const { ApiPromise } = require('@polkadot/api');
-const { WsProvider } = require('@polkadot/rpc-provider');
+const { HttpProvider, WsProvider } = require('@polkadot/rpc-provider');
 const { xxhashAsHex } = require('@polkadot/util-crypto');
 const { chain } = require('stream-chain');
 const { parser } = require('stream-json');
@@ -19,8 +19,55 @@ const originalSpecPath = path.join(__dirname, 'data', 'genesis.json');
 const forkedSpecPath = path.join(__dirname, 'data', 'fork.json');
 const storagePath = path.join(__dirname, 'data', 'storage.json');
 
-// Using http endpoint since substrate's Ws endpoint has a size limit.
-const provider = new WsProvider(process.env.HTTP_RPC_ENDPOINT || 'http://localhost:9933')
+// A single WebSocket carries the whole state download, which takes minutes. One corrupt
+// TLS record anywhere in that stream ends the session with ERR_SSL_SSLV3_ALERT_BAD_RECORD_MAC
+// and loses the entire run -- observed four times against peaq mainnet, at anywhere between
+// 9 and 77 minutes in. Plain HTTP gives every RPC call its own request, so the same corrupt
+// record costs one retry (see sendWithRetry) instead of the whole download.
+// Set FORK_USE_WS=true to go back to the old WebSocket behaviour.
+const rpcEndpoint = process.env.HTTP_RPC_ENDPOINT || 'http://localhost:9933';
+const useWsProvider = process.env.FORK_USE_WS === 'true';
+// The caller passes a ws:// or wss:// URL; the same host serves plain JSON-RPC over
+// http/https, so only the scheme needs rewriting.
+const httpEndpoint = rpcEndpoint.replace(/^ws:\/\//, 'http://').replace(/^wss:\/\//, 'https://');
+const provider = useWsProvider
+  ? new WsProvider(rpcEndpoint)
+  : new HttpProvider(httpEndpoint);
+console.log(`RPC provider: ${useWsProvider ? 'WebSocket' : 'HTTP'} -> ${useWsProvider ? rpcEndpoint : httpEndpoint}`);
+
+// How many storage reads may be in flight at once. Over a WebSocket these were multiplexed
+// on one connection; over HTTP each is a separate request, so this caps how hard we hit the
+// upstream node.
+const sendConcurrency = Number(process.env.FORK_SEND_CONCURRENCY || 50);
+const sendRetries = Number(process.env.FORK_SEND_RETRIES || 5);
+
+/** One RPC call, retried with exponential backoff so a transient transport error is survivable. */
+async function sendWithRetry(method, params) {
+  let lastError;
+  for (let attempt = 0; attempt <= sendRetries; attempt++) {
+    try {
+      return await provider.send(method, params);
+    } catch (err) {
+      lastError = err;
+      if (attempt === sendRetries) {
+        break;
+      }
+      const waitMs = Math.min(500 * Math.pow(2, attempt), 8000);
+      console.log(`  ${method} failed (attempt ${attempt + 1}/${sendRetries + 1}): ${err.message}; retrying in ${waitMs}ms`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw lastError;
+}
+
+/** Promise.all, but at most `limit` at a time. */
+async function mapLimit(items, limit, fn) {
+  const results = [];
+  for (let i = 0; i < items.length; i += limit) {
+    results.push(...await Promise.all(items.slice(i, i + limit).map(fn)));
+  }
+  return results;
+}
 // The storage download will be split into 256^chunksLevel chunks.
 const chunksLevel = process.env.FORK_CHUNKS_LEVEL || 1;
 const totalChunks = Math.pow(256, chunksLevel);
@@ -60,6 +107,21 @@ const peaqIgnorePrefixes = [
   '0x61c5c8e4cdb377abf7410e192c83b647', // PeaqRbac
   '0x1da53b775b270400e7e61ed5cbc5a146' // EVM
 ];
+
+// System.Account holds every account on the chain (~1.1 GB on peaq mainnet), but the
+// forked-chain tests only need staking participants plus the runtime's pot accounts.
+// When ACCOUNT_WHITELIST_FILE is set we stop walking the System.Account range almost
+// immediately and fetch the listed accounts one by one afterwards instead
+// (see fetchWhitelistedAccounts). Leaving the variable unset keeps the old behaviour
+// of downloading every account.
+const SYSTEM_ACCOUNT_PREFIX = '0x26aa394eea5630e07c48ae0c9558cef7b99d880ec681799c0cf30e8886371da9';
+const accountWhitelistFile = process.env.ACCOUNT_WHITELIST_FILE || '';
+// Deliberately kept separate from noIgnoreSize: the other ignored prefixes keep their
+// existing 100k allowance, only System.Account is cut short.
+const systemAccountKeepSize = Number(process.env.SYSTEM_ACCOUNT_KEEP_SIZE || 0);
+if (accountWhitelistFile !== '') {
+  peaqIgnorePrefixes.push(SYSTEM_ACCOUNT_PREFIX);
+}
 
 const skippedModulesPrefix = ['System', 'Babe', 'Grandpa', 'GrandpaFinality', 'FinalityTracker'];
 const skippedParachainPrefix = ['ParachainSystem', 'ParachainInfo']
@@ -262,6 +324,7 @@ async function main() {
     const stream = fs.createWriteStream(storagePath, { flags: 'a' });
     stream.write("[");
     await fetchChunks("0x", chunksLevel, stream, at);
+    await fetchWhitelistedAccounts(stream, at);
     stream.write("]");
     stream.end();
     progressBar.stop();
@@ -383,21 +446,52 @@ async function main() {
 
 main();
 
+// Pulls the individual System.Account entries listed in ACCOUNT_WHITELIST_FILE.
+// Runs after the bulk walk, which skipped the System.Account range, so these are the
+// only accounts that end up in the forked chain.
+async function fetchWhitelistedAccounts(stream, at) {
+  if (accountWhitelistFile === '') {
+    return;
+  }
+  const keys = fs.readFileSync(accountWhitelistFile, 'utf8')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('0x'));
+  console.log(chalk.green(`Fetching ${keys.length} whitelisted accounts individually`));
+
+  const BATCH = 200;
+  let written = 0;
+  for (let i = 0; i < keys.length; i += BATCH) {
+    const pairs = [];
+    await mapLimit(keys.slice(i, i + BATCH), sendConcurrency, async (key) => {
+      const value = await sendWithRetry('state_getStorage', [key, at]);
+      // An account that never existed on chain returns null; writing that through would
+      // not decode as AccountInfo later, so drop it instead.
+      if (value !== null && value !== undefined) {
+        pairs.push([key, value]);
+      }
+    });
+    if (pairs.length > 0) {
+      separator ? stream.write(",") : (separator = true);
+      stream.write(JSON.stringify(pairs).slice(1, -1));
+      written += pairs.length;
+    }
+  }
+  console.log(chalk.green(`Whitelisted accounts written: ${written}/${keys.length}`));
+}
+
 async function fetchChunks(prefix, levelsRemaining, stream, at) {
   if (levelsRemaining <= 0) {
     let startKey = null;
     let no_skip_size = 0;
     while (true) {
-      const keys = await provider.send('state_getKeysPaged', [prefix, pageSize, startKey, at]);
+      const keys = await sendWithRetry('state_getKeysPaged', [prefix, pageSize, startKey, at]);
       if (keys.length > 0) {
         let pairs = [];
-        await Promise.all(
-          keys
-            .map(async (key) => {
-              const value = await provider.send('state_getStorage', [key, at]);
-              pairs.push([key, value]);
-            })
-        );
+        await mapLimit(keys, sendConcurrency, async (key) => {
+          const value = await sendWithRetry('state_getStorage', [key, at]);
+          pairs.push([key, value]);
+        });
 
         if (pairs.length > 0) {
           separator ? stream.write(",") : (separator = true);
@@ -413,7 +507,10 @@ async function fetchChunks(prefix, levelsRemaining, stream, at) {
         let found_peaq_prefix_key = peaqIgnorePrefixes.find(prefix => startKey.startsWith(prefix));
         no_skip_size += keys.length;
         console.log(`Found peaq prefix key: ${found_peaq_prefix_key}, no skip size: ${no_skip_size}`);
-        if (found_peaq_prefix_key && no_skip_size > noIgnoreSize) {
+        const ignoreLimit = found_peaq_prefix_key === SYSTEM_ACCOUNT_PREFIX
+          ? systemAccountKeepSize
+          : noIgnoreSize;
+        if (found_peaq_prefix_key && no_skip_size > ignoreLimit) {
           new_prefix = get_next_prefix(found_peaq_prefix_key);
           console.log(`New prefix: ${new_prefix}, old prefix: ${prefix}`);
           prefix = new_prefix;
